@@ -21,13 +21,24 @@ class ProbabilityModel:
             return float(norm.pdf(x))
         return math.exp(-0.5 * x * x) / math.sqrt(2.0 * math.pi)
 
-    def model_probability(self, spot: float, strike: float, days_to_expiry: float, annualized_vol: float, r: float = 0.0) -> float:
+    def model_probability(self, spot: float, strike: float, days_to_expiry: float, annualized_vol: float, r: float = 0.0, cap_strike: float | None = None) -> float:
         if days_to_expiry <= 0:
+            if cap_strike is not None:
+                return 1.0 if strike <= spot < cap_strike else 0.0
             return 1.0 if spot > strike else 0.0
+        
         t = days_to_expiry / 365.0
         vol = max(annualized_vol, 1e-9)
-        d2 = (math.log(spot / strike) + (r - 0.5 * vol * vol) * t) / (vol * math.sqrt(t))
-        return math.exp(-r * t) * self._cdf(d2)
+        
+        def prob_above(k: float) -> float:
+            d2 = (math.log(spot / k) + (r - 0.5 * vol * vol) * t) / (vol * math.sqrt(t))
+            return math.exp(-r * t) * self._cdf(d2)
+
+        if cap_strike is not None:
+            # P(K_low < S < K_high) = P(S > K_low) - P(S > K_high)
+            return max(prob_above(strike) - prob_above(cap_strike), 0.0)
+        
+        return prob_above(strike)
 
     def hedge_ratio(self, spot: float, strike: float, days_to_expiry: float, annualized_vol: float, r: float = 0.0) -> float:
         if days_to_expiry <= 0:

@@ -96,23 +96,43 @@ class BacktestRunner:
     ) -> list[HistoricalPoint]:
         if not kalshi.points or not robinhood_points:
             return []
+        
         points: list[HistoricalPoint] = []
         vol = VolEstimator(self._config.RING_BUFFER_SIZE)
         model = ProbabilityModel()
+        
+        # Sort both by timestamp
         kalshi_points = sorted(kalshi.points, key=lambda item: item[0])
-        kalshi_times = [item[0] for item in kalshi_points]
-        for rh in robinhood_points:
-            idx = bisect_right(kalshi_times, rh.timestamp) - 1
-            if idx < 0:
-                idx = 0
-            ts, yes_bid, yes_ask, price, volume, oi = kalshi_points[idx]
-            spot_mid = (rh.bid + rh.ask) / 2.0
+        rh_points = sorted(robinhood_points, key=lambda item: item.timestamp)
+        rh_times = [p.timestamp.timestamp() for p in rh_points]
+        rh_bids = [p.bid for p in rh_points]
+        rh_asks = [p.ask for p in rh_points]
+
+        import numpy as np
+
+        for kp in kalshi_points:
+            ts, yes_bid, yes_ask, price, volume, oi = kp
+            ts_val = ts.timestamp()
+            
+            # Interpolate spot prices
+            if ts_val <= rh_times[0]:
+                bid, ask = rh_bids[0], rh_asks[0]
+            elif ts_val >= rh_times[-1]:
+                bid, ask = rh_bids[-1], rh_asks[-1]
+            else:
+                bid = float(np.interp(ts_val, rh_times, rh_bids))
+                ask = float(np.interp(ts_val, rh_times, rh_asks))
+            
+            spot_mid = (bid + ask) / 2.0
             vol.update(spot_mid)
-            dte_hours = max((kalshi.contract.expiry_dt - rh.timestamp).total_seconds() / 3600.0, 0.0)
+            
+            dte_hours = max((kalshi.contract.expiry_dt - ts).total_seconds() / 3600.0, 0.0)
             implied_prob = max(min(float(yes_ask), 1.0), 0.0)
+            
             model_prob = None
             edge_bps = None
             vol_value = None
+            
             if vol.has_sufficient_data():
                 vol_value = vol.annualized_vol()
                 model_prob = model.model_probability(
@@ -120,12 +140,15 @@ class BacktestRunner:
                     kalshi.contract.strike_usd,
                     dte_hours / 24.0,
                     vol_value,
-                    r=0.0
+                    r=0.0,
+                    cap_strike=kalshi.contract.cap_strike_usd
                 )
                 edge_bps = (model_prob - implied_prob) * 10000.0
+            
             contract = ContractQuote(
                 ticker=kalshi.contract.ticker,
                 strike_usd=kalshi.contract.strike_usd,
+                cap_strike_usd=kalshi.contract.cap_strike_usd,
                 expiry_dt=kalshi.contract.expiry_dt,
                 yes_ask=max(min(yes_ask, 1.0), 0.0),
                 no_ask=max(min(1.0 - yes_bid, 1.0), 0.0),
@@ -136,10 +159,10 @@ class BacktestRunner:
             )
             points.append(
                 HistoricalPoint(
-                    timestamp=rh.timestamp,
+                    timestamp=ts,
                     btc_spot_mid=spot_mid,
-                    btc_spot_bid=rh.bid,
-                    btc_spot_ask=rh.ask,
+                    btc_spot_bid=bid,
+                    btc_spot_ask=ask,
                     contract=contract,
                     model_prob=model_prob,
                     implied_prob=implied_prob,

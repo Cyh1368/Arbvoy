@@ -16,6 +16,7 @@ class ContractQuote:
     no_bid: float
     volume_24h: float
     open_interest: float
+    cap_strike_usd: float | None = None
 
     @property
     def implied_probability(self) -> float:

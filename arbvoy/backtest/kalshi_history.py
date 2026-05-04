@@ -42,84 +42,101 @@ def _parse_ts(value: Any) -> datetime:
 async def fetch_historical_kalshi_series(
     config: AppConfig,
     ticker: str,
-    series_ticker: str = "KXBTC",
+    series_ticker: str | None = None,
     period_interval: int = 1,
     session: aiohttp.ClientSession | None = None,
 ) -> KalshiHistorySeries:
+    if series_ticker is None:
+        # Auto-detect or try both
+        if "KXBTCD" in ticker:
+            candidates = ["KXBTCD", "KXBTC"]
+        else:
+            candidates = ["KXBTC", "KXBTCD"]
+    else:
+        candidates = [series_ticker]
+
     owns_session = session is None
     client = session or aiohttp.ClientSession()
+    last_exc = None
     try:
-        markets_url = "https://api.elections.kalshi.com/trade-api/v2/historical/markets"
-        market = None
-        cursor: str | None = None
-        while True:
-            markets_params = {"series_ticker": series_ticker, "limit": 1000}
-            if cursor:
-                markets_params["cursor"] = cursor
-            async with client.get(markets_url, params=markets_params) as resp:
-                market_payload = await resp.json(content_type=None)
-            markets = market_payload.get("markets", []) if isinstance(market_payload, dict) else []
-            market = next((item for item in markets if item.get("ticker") == ticker), None)
-            if market is not None:
-                break
-            cursor = market_payload.get("cursor") if isinstance(market_payload, dict) else None
-            if not cursor:
-                break
-        if market is None:
-            raise RuntimeError(f"historical Kalshi market not found: {ticker}")
-        open_time = _parse_ts(market.get("open_time") or market.get("created_time") or market.get("close_time") or datetime.now(timezone.utc))
-        close_time = _parse_ts(market.get("close_time") or market.get("expected_expiration_time") or market.get("expiration_time") or datetime.now(timezone.utc))
-        if close_time <= open_time:
-            close_time = datetime.now(timezone.utc)
-        url = f"https://api.elections.kalshi.com/trade-api/v2/historical/markets/{ticker}/candlesticks"
-        params = {
-            "start_ts": int(open_time.timestamp()),
-            "end_ts": int(close_time.timestamp()),
-            "period_interval": period_interval,
-        }
-        async with client.get(url, params=params) as resp:
-            payload = await resp.json(content_type=None)
-            print(f"DEBUG: candlesticks URL: {url} params: {params} payload_keys: {list(payload.keys()) if isinstance(payload, dict) else 'Not a dict'}")
-        contract = ContractQuote(
-            ticker=ticker,
-            strike_usd=float(market.get("floor_strike") or market.get("cap_strike") or market.get("functional_strike") or 0.0),
-            expiry_dt=_parse_ts(market.get("expected_expiration_time") or market.get("expiration_time") or market.get("close_time") or datetime.now(timezone.utc)),
-            yes_ask=float(market.get("yes_ask_dollars") or market.get("yes_ask") or market.get("yes_bid_dollars") or 0.5),
-            no_ask=float(market.get("no_ask_dollars") or market.get("no_ask") or market.get("no_bid_dollars") or 0.5),
-            yes_bid=float(market.get("yes_bid_dollars") or market.get("yes_bid") or 0.5),
-            no_bid=float(market.get("no_bid_dollars") or market.get("no_bid") or 0.5),
-            volume_24h=float(market.get("volume_24h_fp") or market.get("volume_fp") or 0.0),
-            open_interest=float(market.get("open_interest_fp") or market.get("open_interest") or 0.0),
-        )
-        candlesticks = payload.get("candlesticks", []) if isinstance(payload, dict) else []
-        if not candlesticks and isinstance(payload, dict):
-            candlesticks = payload.get("candles", []) or payload.get("data", [])
-        points: list[tuple[datetime, float, float, float, float, float]] = []
-        for candle in candlesticks:
-            end_ts = candle.get("end_period_ts")
-            if end_ts is None:
-                continue
-            # DEBUG
-            # print(f"DEBUG: candle={candle}")
-            
-            yes_bid = candle.get("yes_bid", {})
-            yes_ask = candle.get("yes_ask", {})
-            
-            # Helper to get best price
-            def get_price(p_dict):
-                return float(p_dict.get("close_dollars") or p_dict.get("close") or p_dict.get("open_dollars") or p_dict.get("open") or 0.0)
+        for series in candidates:
+            try:
+                markets_url = "https://api.elections.kalshi.com/trade-api/v2/historical/markets"
+                market = None
+                cursor: str | None = None
+                while True:
+                    markets_params = {"series_ticker": series, "limit": 1000}
+                    if cursor:
+                        markets_params["cursor"] = cursor
+                    async with client.get(markets_url, params=markets_params) as resp:
+                        market_payload = await resp.json(content_type=None)
+                    markets = market_payload.get("markets", []) if isinstance(market_payload, dict) else []
+                    market = next((item for item in markets if item.get("ticker") == ticker), None)
+                    if market is not None:
+                        break
+                    cursor = market_payload.get("cursor") if isinstance(market_payload, dict) else None
+                    if not cursor:
+                        break
+                if market is None:
+                    continue # Try next series
 
-            points.append(
-                (
-                    _parse_ts(candle.get("end_period_ts")),
-                    get_price(yes_bid),
-                    get_price(yes_ask),
-                    get_price(candle.get("price", {})),
-                    float(candle.get("volume") or candle.get("volume_fp") or 0.0),
-                    float(candle.get("open_interest") or candle.get("open_interest_fp") or 0.0),
+                open_time = _parse_ts(market.get("open_time") or market.get("created_time") or market.get("close_time") or datetime.now(timezone.utc))
+                close_time = _parse_ts(market.get("close_time") or market.get("expected_expiration_time") or market.get("expiration_time") or datetime.now(timezone.utc))
+                if close_time <= open_time:
+                    close_time = datetime.now(timezone.utc)
+                url = f"https://api.elections.kalshi.com/trade-api/v2/historical/markets/{ticker}/candlesticks"
+                params = {
+                    "start_ts": int(open_time.timestamp()),
+                    "end_ts": int(close_time.timestamp()),
+                    "period_interval": period_interval,
+                }
+                async with client.get(url, params=params) as resp:
+                    payload = await resp.json(content_type=None)
+                    # print(f"DEBUG: candlesticks URL: {url} params: {params} payload_keys: {list(payload.keys()) if isinstance(payload, dict) else 'Not a dict'}")
+                floor_strike = float(market.get("floor_strike") or market.get("strike") or market.get("functional_strike") or 0.0)
+                cap_strike = float(market.get("cap_strike") or 0.0)
+                if cap_strike == 0:
+                    cap_strike = None
+
+                contract = ContractQuote(
+                    ticker=ticker,
+                    strike_usd=floor_strike,
+                    cap_strike_usd=cap_strike,
+                    expiry_dt=_parse_ts(market.get("expected_expiration_time") or market.get("expiration_time") or market.get("close_time") or datetime.now(timezone.utc)),
+                    yes_ask=float(market.get("yes_ask_dollars") or market.get("yes_ask") or market.get("yes_bid_dollars") or 0.5),
+                    no_ask=float(market.get("no_ask_dollars") or market.get("no_ask") or market.get("no_bid_dollars") or 0.5),
+                    yes_bid=float(market.get("yes_bid_dollars") or market.get("yes_bid") or 0.5),
+                    no_bid=float(market.get("no_bid_dollars") or market.get("no_bid") or 0.5),
+                    volume_24h=float(market.get("volume_24h_fp") or market.get("volume_fp") or 0.0),
+                    open_interest=float(market.get("open_interest_fp") or market.get("open_interest") or 0.0),
                 )
-            )
-        return KalshiHistorySeries(contract=contract, points=points)
+                candlesticks = payload.get("candlesticks", []) if isinstance(payload, dict) else []
+                if not candlesticks and isinstance(payload, dict):
+                    candlesticks = payload.get("candles", []) or payload.get("data", [])
+                points: list[tuple[datetime, float, float, float, float, float]] = []
+                for candle in candlesticks:
+                    end_ts = candle.get("end_period_ts")
+                    if end_ts is None:
+                        continue
+                    yes_bid = candle.get("yes_bid", {})
+                    yes_ask = candle.get("yes_ask", {})
+                    def get_price(p_dict):
+                        return float(p_dict.get("close_dollars") or p_dict.get("close") or p_dict.get("open_dollars") or p_dict.get("open") or 0.0)
+                    points.append(
+                        (
+                            _parse_ts(candle.get("end_period_ts")),
+                            get_price(yes_bid),
+                            get_price(yes_ask),
+                            get_price(candle.get("price", {})),
+                            float(candle.get("volume") or candle.get("volume_fp") or 0.0),
+                            float(candle.get("open_interest") or candle.get("open_interest_fp") or 0.0),
+                        )
+                    )
+                return KalshiHistorySeries(contract=contract, points=points)
+            except Exception as e:
+                last_exc = e
+                continue
+        raise RuntimeError(f"historical Kalshi market not found: {ticker}") from last_exc
     finally:
         if owns_session:
             await client.close()
