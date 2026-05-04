@@ -115,7 +115,13 @@ class BacktestRunner:
             vol_value = None
             if vol.has_sufficient_data():
                 vol_value = vol.annualized_vol()
-                model_prob = model.model_probability(spot_mid, kalshi.contract.strike_usd, dte_hours / 24.0, vol_value)
+                model_prob = model.model_probability(
+                    spot_mid,
+                    kalshi.contract.strike_usd,
+                    dte_hours / 24.0,
+                    vol_value,
+                    r=0.0
+                )
                 edge_bps = (model_prob - implied_prob) * 10000.0
             contract = ContractQuote(
                 ticker=kalshi.contract.ticker,
@@ -253,11 +259,20 @@ class BacktestRunner:
 
 
 async def main() -> int:
+    import argparse
     from arbvoy.config import load_config
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--kalshi-ticker")
+    parser.add_argument("--robinhood-history-path")
+    args = parser.parse_args()
 
     config = load_config()
     runner = BacktestRunner(config)
-    result = await runner.run(kalshi_ticker="KXBTC-26MAY0317-T68250", robinhood_history_path="artifacts/robinhood_history.csv")
+    result = await runner.run(
+        kalshi_ticker=args.kalshi_ticker or "KXBTC-26FEB2717-B65750",
+        robinhood_history_path=args.robinhood_history_path or "artifacts/robinhood_history.csv"
+    )
     print(f"points={len(result.points)} trades={len(result.trades)} report={result.report_path}")
     return 0
 

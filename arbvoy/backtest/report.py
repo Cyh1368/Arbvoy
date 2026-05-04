@@ -113,35 +113,31 @@ class BacktestReport:
         fig.add_trace(go.Scatter(x=windowed["timestamp"], y=windowed["yes_bid"], name="YES Bid", mode="lines"), row=1, col=1, secondary_y=True)
         entry_points = []
         exit_points = []
-        for trade in trades:
-            entry_ts = self._ts(trade.entry_time)
-            entry_row = windowed.loc[windowed["timestamp"] == entry_ts]
-            if entry_row.empty:
-                entry_row = windowed.iloc[[windowed["timestamp"].sub(entry_ts).abs().idxmin()]]
-            if not entry_row.empty:
-                entry_points.append(
-                    {
-                        "timestamp": entry_row.iloc[0]["timestamp"],
-                        "spot": entry_row.iloc[0]["spot"],
-                        "label": trade.direction,
-                    }
-            )
-            if trade.exit_time is not None:
-                exit_ts = self._ts(trade.exit_time)
-                exit_row = windowed.loc[windowed["timestamp"] == exit_ts]
-                if exit_row.empty:
-                    exit_row = windowed.iloc[[windowed["timestamp"].sub(exit_ts).abs().idxmin()]]
-                if not exit_row.empty:
-                    exit_points.append(
+        if trades:
+            for trade in trades:
+                entry_ts = self._ts(trade.entry_time)
+                entry_mask = (windowed["timestamp"] - entry_ts).abs() < pd.Timedelta(minutes=5)
+                entry_row = windowed[entry_mask]
+                if not entry_row.empty:
+                    entry_points.append(
                         {
-                            "timestamp": exit_row.iloc[0]["timestamp"],
-                            "spot": exit_row.iloc[0]["spot"],
-                            "label": trade.exit_reason or "exit",
+                            "timestamp": entry_row.iloc[0]["timestamp"],
+                            "spot": entry_row.iloc[0]["spot"],
+                            "label": trade.direction,
                         }
                     )
-            fig.add_vline(x=entry_ts.to_pydatetime(), line_width=1, line_dash="dot", line_color="green", row=1, col=1)
-            if trade.exit_time is not None:
-                fig.add_vline(x=exit_ts.to_pydatetime(), line_width=1, line_dash="dot", line_color="red", row=1, col=1)
+                if trade.exit_time is not None:
+                    exit_ts = self._ts(trade.exit_time)
+                    exit_mask = (windowed["timestamp"] - exit_ts).abs() < pd.Timedelta(minutes=5)
+                    exit_row = windowed[exit_mask]
+                    if not exit_row.empty:
+                        exit_points.append(
+                            {
+                                "timestamp": exit_row.iloc[0]["timestamp"],
+                                "spot": exit_row.iloc[0]["spot"],
+                                "label": trade.exit_reason or "exit",
+                            }
+                        )
         if entry_points:
             entry_df = pd.DataFrame(entry_points)
             fig.add_trace(

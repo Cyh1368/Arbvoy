@@ -13,7 +13,7 @@ class VolEstimator:
         self._prices.append(float(price))
 
     def has_sufficient_data(self) -> bool:
-        return len(self._prices) >= 300
+        return len(self._prices) >= 2
 
     def annualized_vol(self) -> float:
         if len(self._prices) < 2:

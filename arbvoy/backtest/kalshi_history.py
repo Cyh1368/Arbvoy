@@ -79,6 +79,7 @@ async def fetch_historical_kalshi_series(
         }
         async with client.get(url, params=params) as resp:
             payload = await resp.json(content_type=None)
+            print(f"DEBUG: candlesticks URL: {url} params: {params} payload_keys: {list(payload.keys()) if isinstance(payload, dict) else 'Not a dict'}")
         contract = ContractQuote(
             ticker=ticker,
             strike_usd=float(market.get("floor_strike") or market.get("cap_strike") or market.get("functional_strike") or 0.0),
@@ -98,15 +99,22 @@ async def fetch_historical_kalshi_series(
             end_ts = candle.get("end_period_ts")
             if end_ts is None:
                 continue
+            # DEBUG
+            # print(f"DEBUG: candle={candle}")
+            
             yes_bid = candle.get("yes_bid", {})
             yes_ask = candle.get("yes_ask", {})
-            price = candle.get("price", {})
+            
+            # Helper to get best price
+            def get_price(p_dict):
+                return float(p_dict.get("close_dollars") or p_dict.get("close") or p_dict.get("open_dollars") or p_dict.get("open") or 0.0)
+
             points.append(
                 (
-                    _parse_ts(end_ts),
-                    float(yes_bid.get("close") or yes_bid.get("close_dollars") or price.get("close") or price.get("close_dollars") or 0.0),
-                    float(yes_ask.get("close") or yes_ask.get("close_dollars") or 0.0),
-                    float(price.get("close") or price.get("close_dollars") or 0.0),
+                    _parse_ts(candle.get("end_period_ts")),
+                    get_price(yes_bid),
+                    get_price(yes_ask),
+                    get_price(candle.get("price", {})),
                     float(candle.get("volume") or candle.get("volume_fp") or 0.0),
                     float(candle.get("open_interest") or candle.get("open_interest_fp") or 0.0),
                 )
